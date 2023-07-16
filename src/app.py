@@ -17,23 +17,10 @@ bot.
 
 import logging
 import os, requests, re
-import handlers
+import helpers
 from  dotenv import load_dotenv
 from bson import json_util
 
-from telegram import __version__ as TG_VER
-
-try:
-    from telegram import __version_info__
-except ImportError:
-    __version_info__ = (0, 0, 0, 0, 0)  # type: ignore[assignment]
-
-if __version_info__ < (20, 0, 0, "alpha", 1):
-    raise RuntimeError(
-        f"This example is not compatible with your current PTB version {TG_VER}. To view the "
-        f"{TG_VER} version of this example, "
-        f"visit https://docs.python-telegram-bot.org/en/v{TG_VER}/examples.html"
-    )
 from telegram import  Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
@@ -52,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
-API_BASE_URI = 'http://127.0.0.1:8080'
+API_BASE_URI = os.getenv('API_BASE_URI')
 CADENA_TEMPLATE = '''<b>Titulo</b>: {titulo}
 <b>id</b>: {id}
 <b>slug</b>: {slug}
@@ -64,13 +51,16 @@ CADENA_TEMPLATE = '''<b>Titulo</b>: {titulo}
 <b>participantes</b>:
 '''
 
-ELECCION_CADENA, GUARDAR_VALOR_CADENA, ELECCION_PARTICIPANTE, GUARDAR_VALOR_PARTICIPANTE, RETRY = range(5)
+ELECCION_CADENA, GUARDAR_VALOR_CADENA = range(2)
+ELECCION_PARTICIPANTE, GUARDAR_VALOR_PARTICIPANTE, RETRY = range(2, 5) 
+SUBMIT, SHOW_DATA = range(5, 7) 
 
 opciones_teclado_cadena = [
     ['Titulo', 'Mensaje de notificación'],
     ['Fecha de inicio', 'Fecha de fin'],
     ['dias de aviso', 'Periodicidad'],
     ['Participantes'],
+    ['Ver Info'],
     ['Listo']
 ]
 
@@ -82,6 +72,9 @@ opciones_teclado_participantes = [
 
 markup_cadena = ReplyKeyboardMarkup(opciones_teclado_cadena, one_time_keyboard=True)
 markup_participante = ReplyKeyboardMarkup(opciones_teclado_participantes, one_time_keyboard=True)
+
+participante_dict = {}
+participantes_list = []
 
 # Define a few command handlers. These usually take the two arguments update and
 # context.
@@ -141,7 +134,7 @@ async def get_cadena(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             autor_nombre=computable_response['autor']['nombre'],
             fecha_inicio=str(computable_response['fecha_inicio'].date()),
             fecha_fin=str(computable_response['fecha_fin'].date()),
-            dia_aviso=computable_response['aviso'],
+            dia_aviso=computable_response['dia_aviso'],
             mensaje=computable_response['mensaje']
         )
 
@@ -155,14 +148,18 @@ async def create_cadena(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return ELECCION_CADENA
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global participantes_list
     user_data = context.user_data
     await update.message.reply_text(
         "La creación de cadena ha sido cancelada.", reply_markup=ReplyKeyboardRemove()
     )
     user_data.clear()
+    participante_dict.clear()
+    participantes_list = []
+
     return ConversationHandler.END
 
-async def guardar_eleccion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def guardar_eleccion_cadena(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text
     context.user_data["choice"] = text
     await update.message.reply_text(f"Provee un valor para {text}.")
@@ -179,18 +176,21 @@ async def guardar_valor_cadena(update: Update, context: ContextTypes.DEFAULT_TYP
 
     await update.message.reply_text(
         "Perfecto, estos son los valores que he guardado:"
-        f"{handlers.facts_to_str(user_data)}Puedes actualizar un valor o continuar con los demás",
+        f"{helpers.facts_to_str(user_data)}Puedes actualizar un valor o continuar con los demás",
         reply_markup=markup_cadena,
     )
-    print('hola')
     return ELECCION_CADENA
 
 async def create_participante(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_html("Para crear un participante por favor diligenciar cada una de las siguientes opciones.", reply_markup=markup_participante)
     return ELECCION_PARTICIPANTE
 
-async def guardar_eleccion_participante (update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    print(update.message.text) 
+async def guardar_eleccion_participante(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    context.user_data["eleccion_participante"] = text
+    participante_dict[text] = None
+    print(context.user_data, participante_dict)
+
     await update.message.reply_html("Voy a guardar eleccion participante", reply_markup=ReplyKeyboardRemove())
 
     print('Voy a guardar eleccion participante')
@@ -198,23 +198,50 @@ async def guardar_eleccion_participante (update: Update, context: ContextTypes.D
 
 async def guardar_valor_participante(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     print(update.message.text)
+    user_data = context.user_data
+    text = update.message.text
+    category = user_data["eleccion_participante"]
+    participante_dict[category] = text
+    del user_data["eleccion_participante"]
+
+    if not set(['Nombre', 'Puesto', 'Numero']).issubset(participante_dict.keys()):
+        diff_params = list(set(['Nombre', 'Puesto', 'Numero']).symmetric_difference(participante_dict.keys()))
+        formatted_diff = ", ".join(diff_params)
+        await update.message.reply_text(f'Por favor diligencia los campos: {formatted_diff}',reply_markup=markup_participante)
+        return ELECCION_PARTICIPANTE
+    
+    await update.message.reply_text(
+        "Perfecto, estos son los valores que he guardado:"
+        f"{participante_dict}.",
+    )
     retry_options = [
         ['Si'],
         ['No']
     ]
     retry_markup = ReplyKeyboardMarkup(retry_options)
     await update.message.reply_html("¿Quieres crear otro participante?", reply_markup=retry_markup)
-    # CODIGO para guardar valor de la eleccion
+    participantes_list.append(participante_dict.copy())
+    print(participantes_list)
+    participante_dict.clear()    
     return RETRY
 
-async def retry_handler (update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def retry_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     message = update.message.text.lower()
     if message == 'si':
-        await update.message.reply_html("vas a volver a crear otro participante", reply_markup=markup_participante)
+        await update.message.reply_html("vas a crear otro participante", reply_markup=markup_participante)
         return ELECCION_PARTICIPANTE
 
+    context.user_data['participantes'] = participantes_list
     await update.message.reply_html("No vas a volver a crear otro participante", reply_markup=markup_cadena)
     return ConversationHandler.END
+
+async def show_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    print("Hola")
+    await update.message.reply_html(f"Hola: {context.user_data}", reply_markup=markup_cadena)
+    return ELECCION_CADENA
+
+async def submit_listo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    return None
 
 def main() -> None:
     """Start the bot."""
@@ -255,13 +282,17 @@ def main() -> None:
         states={
             ELECCION_CADENA: [
                 MessageHandler(
-                    filters.Regex('^(Titulo|Mensaje de notificación|Fecha de inicio|Fecha de fin|dias de aviso|Periodicidad)$'), guardar_eleccion),
+                    filters.Regex('^(Titulo|Mensaje de notificación|Fecha de inicio|Fecha de fin|dias de aviso|Periodicidad)$'), guardar_eleccion_cadena,
+                ),
+                MessageHandler(
+                    filters.Regex('^(Ver Info)$'), show_data,
+                ),
                 participantes_conv
                 ],
             GUARDAR_VALOR_CADENA: [
                 MessageHandler(
                     filters.TEXT & ~(filters.COMMAND | filters.Regex("^(Nombre|Numero|Puesto|Listo|Titulo|Mensaje de notificación|Fecha de inicio|Fecha de fin|dias de aviso|Periodicidad)$")), guardar_valor_cadena
-                )],
+                )]
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     )
