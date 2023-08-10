@@ -56,9 +56,9 @@ ELECCION_PARTICIPANTE, GUARDAR_VALOR_PARTICIPANTE, RETRY = range(2, 5)
 SUBMIT, SHOW_DATA = range(5, 7) 
 
 opciones_teclado_cadena = [
-    ['Titulo', 'Mensaje de notificación'],
-    ['Fecha de inicio', 'Fecha de fin'],
-    ['dias de aviso', 'Periodicidad'],
+    ['Titulo', 'Mensaje'],
+    ['Fecha inicio', 'Fecha fin'],
+    ['Dia aviso', 'Periodicidad'],
     ['Participantes'],
     ['Ver Info'],
     ['Listo']
@@ -69,6 +69,26 @@ opciones_teclado_participantes = [
     ['Puesto'],
     ['Numero']
 ]
+
+REQUIRED_VALUES = (
+    'titulo',
+    'fecha inicio',
+    'fecha fin',
+    'participantes'
+)
+
+CHAIN_INTERFACE = {
+    'titulo': None, # Required: Title of the chain.
+    'autor': {},
+    'fecha_inicio': None, # Required: start date of the chain
+    'fecha_fin': None, # # Required: end date of the chain
+    'aviso': 2, # Optional: numbers of days in which the notification message will be sent
+    'activo': True, # Optional: whether the chain will be active or not. Default value true or computed according to dates
+    'mensaje': # Optional: message that will be sent ro all of the participants
+    '''¡Saludos! Este mensaje es para recordar el pago de la cadena.''',
+    'sub_div': 1, # Optional: to sub divide the participants in a month. Available opts are 1 or 2
+    'participantes': [] # Required: List of dictionaries containing the information of the participants
+}
 
 markup_cadena = ReplyKeyboardMarkup(opciones_teclado_cadena, one_time_keyboard=True)
 markup_participante = ReplyKeyboardMarkup(opciones_teclado_participantes, one_time_keyboard=True)
@@ -236,12 +256,22 @@ async def retry_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return ConversationHandler.END
 
 async def show_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    print("Hola")
     await update.message.reply_html(f"Hola: {context.user_data}", reply_markup=markup_cadena)
     return ELECCION_CADENA
 
 async def submit_listo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    return None
+    payload = CHAIN_INTERFACE.copy()
+    user_data = context.user_data
+    await update.message.reply_html(f"Estos son sus datos \n: {user_data}", reply_markup=ReplyKeyboardRemove())
+
+    # Validacion
+    print([i.lower() for i in user_data.keys()], isinstance(user_data.get('participantes'), list))
+    if not set(REQUIRED_VALUES).issubset([i.lower() for i in user_data.keys()]) or not(isinstance(user_data.get('participantes'), list)):
+        print('Faltan llaves requeridas y/o participantes no es una lista o está vacía')
+        return ConversationHandler.END
+
+    print('Entré')
+    return ELECCION_CADENA
 
 def main() -> None:
     """Start the bot."""
@@ -264,7 +294,7 @@ def main() -> None:
                 ],
             GUARDAR_VALOR_PARTICIPANTE: [
                 MessageHandler(
-                    filters.TEXT & ~(filters.COMMAND | filters.Regex("^(Nombre|Numero|Puesto|Listo|Titulo|Mensaje de notificación|Fecha de inicio|Fecha de fin|dias de aviso|Periodicidad)$")), guardar_valor_participante 
+                    filters.TEXT & ~(filters.COMMAND | filters.Regex("^(Nombre|Numero|Puesto|Listo|Titulo|Mensaje|Fecha inicio|Fecha fin|dias de aviso|Periodicidad)$")), guardar_valor_participante 
                 )
             ],
             RETRY: [
@@ -282,10 +312,13 @@ def main() -> None:
         states={
             ELECCION_CADENA: [
                 MessageHandler(
-                    filters.Regex('^(Titulo|Mensaje de notificación|Fecha de inicio|Fecha de fin|dias de aviso|Periodicidad)$'), guardar_eleccion_cadena,
+                    filters.Regex('^(Titulo|Mensaje|Fecha inicio|Fecha fin|dias aviso|Periodicidad)$'), guardar_eleccion_cadena,
                 ),
                 MessageHandler(
                     filters.Regex('^(Ver Info)$'), show_data,
+                ),
+                MessageHandler(
+                    filters.Regex('^(Listo)$'), submit_listo,
                 ),
                 participantes_conv
                 ],
